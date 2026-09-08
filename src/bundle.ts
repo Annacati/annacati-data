@@ -71,23 +71,22 @@ export function buildManifest(m: ManifestInput): object {
   };
 }
 
+// README in italiano, autonomo (non riusa le stringhe inglesi del MANIFEST).
 function readme(m: ManifestInput, manifest: any): string {
   const lines: string[] = [];
-  lines.push("# Annacati curated GTFS " + (m.mode === "sample" ? "sample" : "dataset"));
+  const nota =
+    m.mode === "sample"
+      ? `Campione rappresentativo: le ${m.routesPerAgency ?? 3} linee complete più ` +
+        `trafficate per operatore (tutte le corse, tutti i giorni di calendario, ` +
+        `tracciati completi). Non è la rete completa.`
+      : "Set di dati completo per gli operatori elencati.";
+  lines.push("# GTFS curato Annacati " + (m.mode === "sample" ? "(campione)" : "(dataset)"));
   lines.push("");
-  lines.push(manifest.sample_note);
+  lines.push(nota);
   lines.push("");
-  lines.push("## What makes this different from a raw scrape");
+  lines.push("## Feed inclusi");
   lines.push("");
-  lines.push("- **Curation:** " + manifest.value_add.curation);
-  lines.push("- **Operator edits:** " + manifest.value_add.lua_edits);
-  lines.push("- **Shapes:** " + manifest.value_add.shapes);
-  lines.push("");
-  lines.push("Note: " + manifest.value_add.merges_note);
-  lines.push("");
-  lines.push("## Feeds included");
-  lines.push("");
-  lines.push("| Agency | File | Routes | Trips | Stops | Service window |");
+  lines.push("| Operatore | File | Linee | Corse | Fermate | Periodo di servizio |");
   lines.push("|---|---|---:|---:|---:|---|");
   for (const f of m.feeds) {
     lines.push(
@@ -96,13 +95,20 @@ function readme(m: ManifestInput, manifest: any): string {
     );
   }
   lines.push("");
-  lines.push("## Realtime");
+  lines.push("## Tempo reale");
   lines.push("");
-  lines.push(manifest.realtime_note);
+  lines.push(
+    "Il GTFS-RT (aggiornamenti delle corse / avvisi di servizio) è disponibile " +
+      "separatamente e non fa parte di questo pacchetto statico."
+  );
   lines.push("");
-  lines.push("## License");
+  lines.push("## Licenza");
   lines.push("");
-  lines.push(manifest.license + " " + manifest.contact);
+  lines.push(
+    "CAMPIONE FORNITO SOLO A SCOPO DI VALUTAZIONE. Non concesso in licenza per la " +
+      "ridistribuzione o l'uso in produzione. Per le condizioni di licenza " +
+      "contattare Annacati: " + manifest.contact
+  );
   lines.push("");
   return lines.join("\n");
 }
