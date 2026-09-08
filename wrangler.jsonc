@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "annacati-data",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+
+  // The gold curated feeds baked by baker/bake_curated.py live here
+  // (curated/index.json + curated/<slug>.zip).
+  "r2_buckets": [{ "binding": "DATA", "bucket_name": "annacati-data" }],
+
+  // Per-request usage metering — the billing foundation for a paid API.
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "annacati_data_api" }],
+
+  // Consumer entitlement Worker (app-user Pro). Declared for reuse, but it is
+  // NOT the data-API gate (a data customer is an API key, not an app-user — see
+  // src/auth.ts). Uncomment once the data-API plan model is decided; leaving it
+  // out keeps deploys decoupled from the consumer billing service for now.
+  // "services": [
+  //   { "binding": "ENTITLEMENT", "service": "annacati-entitlement", "entrypoint": "EntitlementService" }
+  // ],
+
+  "routes": [{ "pattern": "data.annacati.com", "custom_domain": true }]
+
+  // Secret (set with: wrangler secret put DATA_API_ADMIN_TOKEN):
+  //   DATA_API_ADMIN_TOKEN  — the admin bearer for /extract and /catalog.
+  // Sync from Infisical folder /annacati-data via CF Workers Secret Sync (house pattern).
+}

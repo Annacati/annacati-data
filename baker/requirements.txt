@@ -1,0 +1,5 @@
+# Baker deps. httpx only for the R2 download path (not needed with --local-feeds);
+# PyYAML is pulled in transitively by the agency-registry generate.py the baker
+# imports to enumerate agencies. A real `lua` interpreter must be on PATH.
+httpx>=0.27
+PyYAML>=6.0

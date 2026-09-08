@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+dist/
+curated/
+*.zip
+__pycache__/
+.venv/
+.DS_Store
+.dev.vars
