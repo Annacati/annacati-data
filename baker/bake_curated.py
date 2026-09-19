@@ -110,21 +110,35 @@ def compose_scripts(out_dir: Path, live_curation: bool) -> None:
 
 def fetch_feed(entry: dict[str, Any], env: str, local: bool, cache: Path) -> Path:
     """Return a path to the raw feed zip. --local-feeds reads the collector's
-    committed data/gtfs/<basename>.zip; otherwise download from R2 (needs token)."""
+    committed data/gtfs/<basename>.zip; otherwise download it.
+
+    Self-hosted (hosted=="r2") feeds come from our R2 origin (bearer-gated). External
+    third-party feeds (hosted=="external") come straight from their registry `static:`
+    URL with no bearer — only baked for the INTERNAL validity dashboard (see
+    --include-external), never for the public resale catalogue."""
+    external = entry.get("hosted") == "external"
     if local:
+        if external:
+            raise FileNotFoundError(f"external feed {entry['slug']} has no local copy; drop --local-feeds")
         p = GTFS_COLLECTOR_DIR / "data" / "gtfs" / f"{entry['basename']}.zip"
         if not p.exists():
             raise FileNotFoundError(f"local feed not found: {p}")
         return p
-    if not GTFS_COLLECTOR_API_TOKEN:
-        raise SystemExit("GTFS_COLLECTOR_API_TOKEN not set (needed to download from R2); "
-                         "use --local-feeds for a dev build")
     import httpx
-    url = f"{FEEDS_BASE[env]}/{entry['basename']}.zip"
-    dest = cache / f"{entry['basename']}.zip"
+    if external:
+        url = entry["static"]
+        if not url:
+            raise FileNotFoundError(f"external feed {entry['slug']} has no static URL")
+        headers = {"User-Agent": USER_AGENT}
+    else:
+        if not GTFS_COLLECTOR_API_TOKEN:
+            raise SystemExit("GTFS_COLLECTOR_API_TOKEN not set (needed to download from R2); "
+                             "use --local-feeds for a dev build")
+        url = f"{FEEDS_BASE[env]}/{entry['basename']}.zip"
+        headers = {"User-Agent": USER_AGENT, "Authorization": f"Bearer {GTFS_COLLECTOR_API_TOKEN}"}
+    dest = cache / f"{entry['basename'] or entry['slug']}.zip"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    headers = {"User-Agent": USER_AGENT, "Authorization": f"Bearer {GTFS_COLLECTOR_API_TOKEN}"}
-    with httpx.Client(timeout=120, follow_redirects=True) as c:
+    with httpx.Client(timeout=180, follow_redirects=True) as c:
         with c.stream("GET", url, headers=headers) as r:
             r.raise_for_status()
             with open(dest, "wb") as fh:
@@ -290,13 +304,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--live-curation", action="store_true",
                     help="pull canonical_stops.json from curation.annacati.com")
     ap.add_argument("--out-dir", default="curated")
+    ap.add_argument("--include-external", action="store_true",
+                    help="also bake external third-party feeds (INTERNAL use only — the "
+                         "agencies validity dashboard; keep out of the public resale catalogue)")
     args = ap.parse_args(argv)
 
     registry = load_registry()
     by_slug = {e["slug"]: e for e in registry}
 
     if args.all:
-        wanted = [e for e in registry if e["hosted"] == "r2"]
+        wanted = [e for e in registry
+                  if e["hosted"] == "r2" or (args.include_external and e["hosted"] == "external")]
     else:
         slugs = [s.strip() for s in args.only.split(",") if s.strip()]
         wanted = []
@@ -318,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         cache = Path(td_cache)
 
         for entry in wanted:
-            if entry["hosted"] != "r2":
+            if entry["hosted"] != "r2" and not args.include_external:
                 skipped.append({"slug": entry["slug"], "reason": "external feed (not self-hosted)"})
                 print(f"[skip] {entry['slug']}: external feed", file=sys.stderr)
                 continue
