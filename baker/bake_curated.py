@@ -52,10 +52,8 @@ GTFS_COLLECTOR_API_TOKEN = os.environ.get("GTFS_COLLECTOR_API_TOKEN", "")
 CURATION_URL = "https://curation.annacati.com/canonical_stops.json"
 USER_AGENT = os.environ.get("USER_AGENT", "annacati-data-baker/1.0")
 
-FEEDS_BASE = {
-    "prod": "https://feeds.annacati.com/gtfs",
-    "beta": "https://feeds.annacati.com/beta/gtfs",
-}
+PROD_FEEDS_BASE = "https://feeds.annacati.com/gtfs"
+BETA_FEEDS_BASE = "https://feeds.annacati.com/beta/gtfs"
 
 # GTFS tables we rewrite; everything else in the zip is copied through verbatim.
 _TRANSFORMED = ("agency.txt", "stops.txt", "routes.txt", "trips.txt")
@@ -63,16 +61,33 @@ _TRANSFORMED = ("agency.txt", "stops.txt", "routes.txt", "trips.txt")
 
 # ── registry enumeration ──────────────────────────────────────────────────────
 
-def load_registry() -> list[dict[str, Any]]:
+def load_registry(env: str) -> list[dict[str, Any]]:
     """[{slug, name, static, basename, hosted}] from the local agency-registry
-    checkout (generate.collect_entries — pure stdlib, no network)."""
+    checkout (generate.collect_entries — pure stdlib, no network).
+
+    For env=="beta" this mirrors the BETA manifest: the union of agencies.yaml +
+    candidates.yaml. Without this, beta-only candidates are never enumerated and
+    the beta validity blob silently omits them. Candidate feeds render against the
+    beta prefix while promoted agencies keep the prod prefix (exactly what beta
+    MOTIS imports), so fetch_feed trusts each entry's `static` verbatim rather than
+    reconstructing a URL from env — see fetch_feed. Prod is agencies.yaml alone."""
     root = str(AGENCY_REGISTRY_DIR)
     if not AGENCY_REGISTRY_DIR.exists():
         raise SystemExit(f"agency-registry checkout not found at {root}")
+    # generate.py reads its FEEDS_BASE (the CANDIDATE feed prefix) at import time,
+    # defaulting to the prod base. Point it at the beta prefix BEFORE importing —
+    # exactly as the beta registry CI does — so candidate `static` URLs resolve to
+    # beta/gtfs. setdefault lets an operator override it explicitly.
+    if env == "beta":
+        os.environ.setdefault("FEEDS_BASE", BETA_FEEDS_BASE)
     if root not in sys.path:
         sys.path.insert(0, root)
     import generate  # noqa
-    entries, _warnings = generate.collect_entries()
+    candidates = None
+    if env == "beta":
+        cand = AGENCY_REGISTRY_DIR / "candidates.yaml"
+        candidates = cand if cand.is_file() else None
+    entries, _warnings = generate.collect_entries(candidates)
     out = []
     for e in entries:
         static = e.get("static", "") or ""
@@ -108,14 +123,17 @@ def compose_scripts(out_dir: Path, live_curation: bool) -> None:
 
 # ── feed I/O ──────────────────────────────────────────────────────────────────
 
-def fetch_feed(entry: dict[str, Any], env: str, local: bool, cache: Path) -> Path:
+def fetch_feed(entry: dict[str, Any], local: bool, cache: Path) -> Path:
     """Return a path to the raw feed zip. --local-feeds reads the collector's
     committed data/gtfs/<basename>.zip; otherwise download it.
 
-    Self-hosted (hosted=="r2") feeds come from our R2 origin (bearer-gated). External
-    third-party feeds (hosted=="external") come straight from their registry `static:`
-    URL with no bearer — only baked for the INTERNAL validity dashboard (see
-    --include-external), never for the public resale catalogue."""
+    Self-hosted (hosted=="r2") feeds come from our R2 origin (bearer-gated) at the
+    entry's `static` URL — which the registry has already resolved to the correct
+    per-agency prefix (prod for promoted agencies even on the beta render; beta/gtfs
+    for candidates), so we never reconstruct it from env. External third-party feeds
+    (hosted=="external") come straight from their registry `static:` URL with no
+    bearer — only baked for the INTERNAL validity dashboard (see --include-external),
+    never for the public resale catalogue."""
     external = entry.get("hosted") == "external"
     if local:
         if external:
@@ -134,7 +152,7 @@ def fetch_feed(entry: dict[str, Any], env: str, local: bool, cache: Path) -> Pat
         if not GTFS_COLLECTOR_API_TOKEN:
             raise SystemExit("GTFS_COLLECTOR_API_TOKEN not set (needed to download from R2); "
                              "use --local-feeds for a dev build")
-        url = f"{FEEDS_BASE[env]}/{entry['basename']}.zip"
+        url = entry["static"]  # authoritative per-agency base (see docstring)
         headers = {"User-Agent": USER_AGENT, "Authorization": f"Bearer {GTFS_COLLECTOR_API_TOKEN}"}
     dest = cache / f"{entry['basename'] or entry['slug']}.zip"
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -215,11 +233,11 @@ def feed_info_txt(publisher_url: str, lang: str, start: str, end: str, version: 
 # ── bake one agency ───────────────────────────────────────────────────────────
 
 def bake_one(
-    entry: dict[str, Any], env: str, local: bool, scripts_dir: Path,
+    entry: dict[str, Any], local: bool, scripts_dir: Path,
     cache: Path, out_dir: Path,
 ) -> dict[str, Any]:
     slug = entry["slug"]
-    feed_path = fetch_feed(entry, env, local, cache)
+    feed_path = fetch_feed(entry, local, cache)
 
     # Read the whole zip into memory; copy everything through, rewrite only the
     # transformed tables (+ feed_info/translations). stop_times/shapes/calendar
@@ -309,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
                          "agencies validity dashboard; keep out of the public resale catalogue)")
     args = ap.parse_args(argv)
 
-    registry = load_registry()
+    registry = load_registry(args.env)
     by_slug = {e["slug"]: e for e in registry}
 
     if args.all:
@@ -341,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[skip] {entry['slug']}: external feed", file=sys.stderr)
                 continue
             try:
-                res = bake_one(entry, args.env, args.local_feeds, scripts_dir, cache, out_dir)
+                res = bake_one(entry, args.local_feeds, scripts_dir, cache, out_dir)
             except Exception as e:  # noqa: BLE001
                 skipped.append({"slug": entry["slug"], "reason": str(e)})
                 print(f"[error] {entry['slug']}: {e}", file=sys.stderr)
